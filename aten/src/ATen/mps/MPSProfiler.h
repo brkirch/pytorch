@@ -134,24 +134,18 @@ struct CopyInfo : BaseInfo {
     CPU_TO_MPS,
   };
 
-  CopyInfo(const void* Handle, size_t Length, uint64_t Id, bool IsNonBlocking, bool UsesBlitter) :
+  CopyInfo(const void* Handle, size_t Length, uint64_t Id, bool IsNonBlocking) :
            BaseInfo(Type::COPY, Id, uintptr_t(Handle)), kind(Kind::MPS_TO_MPS),
-           length(Length), isNonBlocking(IsNonBlocking), usesBlitter(UsesBlitter) { }
+           length(Length), isNonBlocking(IsNonBlocking) { }
 
   Kind kind;
   size_t length;
   bool isNonBlocking;
-  bool usesBlitter;
   std::string srcStrKey;
   std::string dstStrKey;
-  // for copies that don't use blitters, we measure CPU time
-  std::clock_t startTime{};
 
   const std::string toString(double gpuTime = 0, double schedulingTime = 0) const override {
-    return fmt::format("{}Copy{} #{} [Len={}{}]: {} -> {}",
-                       // Copies could be using Blit Encoder, or using regular
-                       // memcpy() on Unified memory
-                       usesBlitter ? "Blit" : "Mem",
+    return fmt::format("Copy{} #{} [Len={}{}]: {} -> {}",
                        // CopySync indicates COMMIT_AND_WAIT was used to synchronize
                        // the GPU stream with CPU after the blocking copy
                        isNonBlocking ? "" : "Sync", profileId,
@@ -193,16 +187,11 @@ struct CopyInfo : BaseInfo {
 };
 
 struct CopyStat : CopyInfo {
-  explicit CopyStat(std::string CopyKindStr) :
-          CopyInfo(nullptr, 0, 0, false, false), kindStr(std::move(CopyKindStr)) {}
+  explicit CopyStat(std::string CopyKindStr) : CopyInfo(nullptr, 0, 0, false), kindStr(std::move(CopyKindStr)) {}
   // total number of copies
   size_t totalCount = 0;
   // number of Scalar copies (i.e., less than sizeof(int64))
   size_t scalarsCount = 0;
-  // number of blocking copies (i.e., require syncing to GPU)
-  size_t blockingCount = 0;
-  // number of copies that used memcpy(), instead of Metal Blit Encoder
-  size_t memcpyCount = 0;
   // accumulated GPU time in ms for the scalar copies
   std::atomic<double> scalarsGpuTime{0.0};
   // copy kind in string type
@@ -283,7 +272,7 @@ public:
   uint64_t beginProfileCopy(const void* srcBuffer, const void* dstBuffer,
                             const OptionalTensorRef srcTensor,
                             const OptionalTensorRef dstTensor,
-                            size_t length, bool isNonBlocking, bool usesBlitter = true);
+                            size_t length, bool isNonBlocking);
   uint64_t beginProfileCPUFallback(const std::string& opName, const TensorList& tensors);
   void beginProfileGPUInterval(const void* handle);
 
@@ -346,10 +335,7 @@ public:
   // a short list that contains copy stats
   std::unordered_map<CopyInfo::Kind, std::unique_ptr<CopyStat>> m_copy_stat_list{};
 
-  void beginProfileExecution(BaseInfo& info, bool cpuExecution = false);
-  void endProfileExecution(BaseInfo& info, os_signpost_id_t event_signpost_id,
-                           os_signpost_id_t interval_signpost_id,
-                           double gpuTime, double schedulingTime);
+  void beginProfileExecution(BaseInfo& info);
   void addProfilerScheduledHandler(BaseInfo& info);
   void addProfilerCompletedHandler(BaseInfo& info, SyncType syncType);
   void emitSignpostEvent(SignpostTypes signpost_type, os_signpost_id_t signpost_id,
@@ -358,9 +344,6 @@ public:
                              const std::string& msg) const;
   void endSignpostInterval(SignpostTypes signpost_type, os_signpost_id_t signpost_id) const;
 
-  void updateCopyStats(const CopyInfo& copyInfo, double gpuTime, double schedulingTime);
-  // returns true if logging the profiling info "during the execution" is enabled
-  bool isProfileInfoLoggingEnabled(BaseInfo::Type infoType);
   // logs all the profiling stats that are enabled
   void logProfilingStats();
   // logs kernel profiling stats when the process ends.
